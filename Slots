@@ -2,13 +2,13 @@
 -- SLOT MACHINE SETTINGS
 -------------------------
 local SYMBOLS = {"I","B","E","D","G","N"} -- slot symbols
-local SPIN_TIME = 1.5
+local SPIN_TIME = 2
 local JACKPOT_CAP = 128
 local PAYOUTS = {I=2,B=3,E=4,D=5,G=6}
 local PITY_PAYOUTS = {I=0,B=0,E=0,D=0,G=0,N=1}
 
 local MONITOR_BG = colors.cyan        -- lightish blue background
-local SYMBOL_BG = colors.lightGray    -- behind symbols/text
+local SYMBOL_BG = colors.lightGray    -- shared background for all symbols
 
 -------------------------
 -- PERIPHERALS
@@ -41,9 +41,12 @@ local function drawAt(x,y,text,color,bg)
     monitor.write(text)
 end
 
-local function clearMonitor()
-    monitor.setBackgroundColor(MONITOR_BG)
-    monitor.clear()
+local function clearSymbolsArea(w,h)
+    for row=2,h-2 do
+        for col=2,w-1 do
+            drawAt(col,row," ",colors.white,SYMBOL_BG)
+        end
+    end
 end
 
 local function playSound(name,pitch) speaker.playSound(name,1,pitch) end
@@ -64,7 +67,7 @@ end
 -- PAYOUT LOGIC
 -------------------------
 local function handleJackpot()
-    resultText = "J"
+    resultText = "JACKPOT!"
     resultColor = colors.green
     dispense(jackpotCounter)
     jackpotCounter = 10
@@ -106,22 +109,22 @@ end
 local function spin()
     spinning = true
     resultText,resultColor = nil,nil
-    clearMonitor()
-
     local w,h = monitor.getSize()
-    if h<5 then error("Monitor too short for 3 rows + arrow + result") end
-    local middleRow = math.floor(h/2)
-    
+    clearSymbolsArea(w,h)
+
     -- Horizontal positions for 3 reels
-    local symbolWidth = 1
-    local totalWidth = 3*symbolWidth + 2 -- spaces between
-    local startX = math.floor((w-totalWidth)/2)+1
-    local symbolX = {startX, startX+2, startX+4}
+    local startX = math.floor(w/2)-2
+    local symbolX = {startX,startX+2,startX+4}
+    local middleRow = math.floor(h/2)
+
+    -- Arrow position on left side
+    local arrowX = 2
+    local arrowY = middleRow
 
     local startTime = os.clock()
     local reels = {{" "," "," "},{" "," "," "},{" "," "," "}}
 
-    -- Spin animation
+    -- Spin animation (drum effect)
     while os.clock()-startTime < SPIN_TIME do
         for col=1,3 do
             for row=1,3 do
@@ -129,7 +132,7 @@ local function spin()
                 drawAt(symbolX[col],middleRow-1+row,reels[col][row],colors.yellow,SYMBOL_BG)
             end
         end
-        drawAt(symbolX[2],middleRow,"v",colors.red,SYMBOL_BG) -- arrow pointing at middle row
+        drawAt(arrowX,arrowY,"→",colors.red,SYMBOL_BG)
         playSound("block.note_block.hat",1)
         sleep(0.2)
     end
@@ -141,39 +144,12 @@ local function spin()
             drawAt(symbolX[col],middleRow-1+row,reels[col][row],colors.yellow,SYMBOL_BG)
         end
     end
-    drawAt(symbolX[2],middleRow,"v",colors.red,SYMBOL_BG)
+    drawAt(arrowX,arrowY,"→",colors.red,SYMBOL_BG)
 
-    -- Evaluate middle row of middle column
+    -- Evaluate middle row of middle column (payline)
     local middleSymbol = reels[2][2]
     if middleSymbol=="N" then
         handleJackpot()
     else
         local chance = math.random(1,6)
         if chance==1 then
-            handleTriple(middleSymbol)
-        elseif chance==2 then
-            handlePity(middleSymbol)
-        else
-            handleLose()
-        end
-    end
-
-    -- Jackpot counter top-right
-    drawAt(w-7,1,"JP:"..jackpotCounter,colors.white,SYMBOL_BG)
-
-    -- Flash result below symbols
-    local resultY = middleRow+3
-    flashResult(resultText,resultColor,math.floor(w/2),resultY)
-
-    spinning = false
-end
-
--------------------------
--- MAIN LOOP
--------------------------
-while true do
-    os.pullEvent("redstone")
-    if redstone.getInput("bottom") and not spinning then
-        spin()
-    end
-end
