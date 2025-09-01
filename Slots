@@ -1,17 +1,13 @@
--- slotmachine_final.lua
--- Centered reels, persistent symbols, edge-detected redstone spins
-
 -- ===============================
 -- SETTINGS
 -- ===============================
 local monitorSide = "right"
 local dropperSide = "back"
 local speakerSide = "top"
-local spinInputSide = "left"     -- redstone input side
-local spinOutputSide = "bottom"  -- spinning indicator
+local spinInputSide = "left"     -- redstone input
+local spinOutputSide = "bottom"  -- redstone spinning indicator
 
 local frameColor = colors.blue
-local slotWindowBgColor = colors.gray
 local symbolBgColor = colors.gray
 local jackpotCounterColor = colors.yellow
 
@@ -38,14 +34,14 @@ mon.setTextScale(0.5)
 mon.clear()
 local width, height = mon.getSize()
 
--- Helper functions
+-- Helpers
 local function note(p)
     if spk then spk.playNote("harp",3,p) end
 end
 
 local function displayJackpot()
     local text = "J:"..(baseJackpot+jackpotCounter)
-    mon.setCursorPos(width - #text +1, 1)
+    mon.setCursorPos(width-#text+1,1)
     mon.setBackgroundColor(frameColor)
     mon.setTextColor(jackpotCounterColor)
     mon.write(text)
@@ -150,6 +146,15 @@ local function calculatePayout(result)
     else return 0 end
 end
 
+local function displayResultText(text,color)
+    local y = height
+    local x = math.floor((width-#text)/2)+1
+    mon.setCursorPos(x,y)
+    mon.setTextColor(color)
+    mon.setBackgroundColor(frameColor)
+    mon.write(text)
+end
+
 -- Initial setup
 mon.setBackgroundColor(frameColor)
 mon.clear()
@@ -160,6 +165,10 @@ while true do
     -- Wait for redstone rising edge
     while redstone.getInput(spinInputSide)==false do os.pullEvent("redstone") end
 
+    -- Clear previous bottom text immediately if needed
+    displayResultText("      ", colors.white)
+
+    -- Spin
     playerMoney = playerMoney - 1
     jackpotCounter = jackpotCounter + 1
     displayJackpot()
@@ -168,6 +177,7 @@ while true do
     local result = checkWin(reels)
     local payout = calculatePayout(result)
 
+    -- Dispense
     if result=="jackpot" then
         dispenseMoney(payout)
         dispenseItems(true)
@@ -177,10 +187,32 @@ while true do
         dispenseItems(false)
     end
 
+    -- Show bottom text
+    if result=="jackpot" then
+        displayResultText("JACKPOT!", colors.lime)
+    elseif result=="win" then
+        displayResultText("WIN!", colors.green)
+    else
+        displayResultText("LOSE!", colors.red)
+    end
+
     playJingle(result)
     flashResult(result)
     displayJackpot()
 
-    -- Wait for redstone to go low before next spin
-    while redstone.getInput(spinInputSide)==true do os.pullEvent("redstone") end
+    -- Auto-clear bottom text after 3s or on next spin
+    local resultTimer = os.startTimer(3)
+    while true do
+        local event,id = os.pullEvent()
+        if event=="timer" and id==resultTimer then
+            displayResultText("      ", colors.white)
+            break
+        elseif event=="redstone" and redstone.getInput(spinInputSide) then
+            displayResultText("      ", colors.white)
+            break
+        end
+    end
+
+    -- Wait until redstone goes low before next spin
+    while redstone.getInput(spinInputSide) do os.pullEvent("redstone") end
 end
