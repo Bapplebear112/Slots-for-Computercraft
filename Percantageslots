@@ -1,0 +1,363 @@
+-- slotmachine_cc_fixed.lua
+-- Timer-driven slot machine with proper monitor/speaker/dropper peripheral usage,
+-- single-press spins, non-blocking flash, adjustable win rates, pity wins.
+
+-- ===============================
+-- SETTINGS (edit these)
+-- ===============================
+
+-- Peripheral configuration
+local monitorSide   = "right"   -- advanced monitor
+local speakerSide   = "top"     -- speaker
+local dropperSide   = "back"    -- dropper/dispenser
+local spinInputSide = "left"    -- redstone input
+local spinOutputSide= "bottom"  -- redstone output indicator while spinning
+
+-- Appearance
+local frameColor       = colors.blue
+local symbolBgColor    = colors.gray
+local jackpotColor     = colors.lime
+local winColor         = colors.green
+local loseColor        = colors.red
+local pityColor        = colors.orange
+local jackpotTextColor = colors.yellow
+
+-- Symbols: char, name, color
+local symbols = {
+    {char = "G", name = "G", color = colors.yellow},
+    {char = "D", name = "D", color = colors.lightBlue},
+    {char = "I", name = "I", color = colors.lightGray},
+    {char = "B", name = "B", color = colors.orange},
+    {char = "E", name = "E", color = colors.green},
+    {char = "N", name = "N", color = colors.black}, -- jackpot
+}
+
+-- Payouts
+local baseJackpot  = 10    -- jackpot base amount
+local jackpotCap   = 128   -- max total jackpot
+local winPayouts   = { G=5, D=4, I=3, B=2, E=1, N=0 } -- jackpot handled separately
+local pityPayout   = 1     -- items for pity win (2 Ns)
+local debugMode    = false -- prints debug output
+
+-- Spin configuration
+local spinTime     = {1.0, 1.6, 2.2} -- seconds each reel spins
+local spinSpeed    = 0.10            -- seconds per spin step
+
+-- Flashing settings
+local flashCount   = 6
+local flashSpeed   = 0.20
+
+-- Win rate percentages for triple wins (0-100)
+local tripleWinRates = {
+    G = 10,
+    D = 8,
+    I = 6,
+    B = 4,
+    E = 2,
+    N = 1
+}
+
+-- Pity eligibility for symbols
+local pityEligibility = { N=true, G=false, D=false, I=false, B=false, E=false }
+
+-- ===============================
+-- Peripheral setup
+-- ===============================
+local mon = nil
+if monitorSide and peripheral.isPresent(monitorSide) and peripheral.getType(monitorSide) == "monitor" then
+    mon = peripheral.wrap(monitorSide)
+else
+    mon = peripheral.find("monitor")
+end
+if not mon then error("No monitor found. Attach an advanced monitor and set monitorSide correctly.") end
+
+local spk = nil
+if speakerSide and peripheral.isPresent(speakerSide) and peripheral.getType(speakerSide) == "speaker" then
+    spk = peripheral.wrap(speakerSide)
+else
+    spk = peripheral.find("speaker")
+end
+
+local dropperPeripheral = nil
+if dropperSide and peripheral.isPresent(dropperSide) then
+    local t = peripheral.getType(dropperSide)
+    if t == "dropper" or t == "dispenser" then
+        dropperPeripheral = peripheral.wrap(dropperSide)
+    end
+end
+if not dropperPeripheral then
+    dropperPeripheral = peripheral.find("dropper") or peripheral.find("dispenser")
+end
+
+-- Monitor init
+mon.setTextScale(0.5)
+mon.setBackgroundColor(frameColor)
+mon.clear()
+local width, height = mon.getSize()
+
+-- ===============================
+-- State variables
+-- ===============================
+local lastRedstoneInput = false
+local spinning = false
+local reels = {1,1,1}         
+local spinOffsets = {0,0,0}
+local spinStopTimes = {0,0,0}
+local spinTimerId = nil
+local dispensing = false
+local previousResultVisible = false
+local clearTimerId = nil
+local flashing = false
+local flashTimerId = nil
+local flashIter = 0
+local flashTotalToggles = 0
+local flashOn = false
+local flashText = ""
+local flashColor = colors.white
+
+-- ===============================
+-- Helper functions
+-- ===============================
+local function safePlayNote(pitch)
+    if not spk then return end
+    if type(spk.playNote) == "function" then
+        pcall(function() spk.playNote("harp", 3, pitch) end)
+    end
+end
+
+local function displayJackpot()
+    local text = "J:" .. tostring(baseJackpot + jackpotCounter)
+    mon.setBackgroundColor(frameColor)
+    local x = width - #text + 1
+    mon.setCursorPos(x, 1)
+    mon.setTextColor(jackpotTextColor)
+    mon.write(text)
+    mon.setTextColor(colors.white)
+end
+
+local function centerXY(text, y)
+    local x = math.floor((width - #text) / 2) + 1
+    return x, y
+end
+
+local function displayResultText(text, color)
+    local y = height
+    local x = centerXY(text, y)
+    mon.setCursorPos(x, y)
+    mon.setBackgroundColor(frameColor)
+    mon.setTextColor(color or colors.white)
+    mon.write(text)
+end
+
+local function clearBottomText()
+    local y = height
+    local blank = string.rep(" ", width)
+    mon.setCursorPos(1, y)
+    mon.setBackgroundColor(frameColor)
+    mon.setTextColor(colors.white)
+    mon.write(blank)
+end
+
+local function drawReelsFromIndices(r)
+    local startCol = math.floor((width - 3) / 2) + 1
+    local startRow = math.floor((height - 3) / 2) + 1
+    for col = 1, 3 do
+        for row = 1, 3 do
+            local idx = ((r[col] + row - 2 - 1) % #symbols) + 1
+            local sym = symbols[idx]
+            mon.setCursorPos(startCol + col - 1, startRow + row - 1)
+            mon.setBackgroundColor(symbolBgColor)
+            mon.setTextColor(sym.color)
+            mon.write(sym.char)
+        end
+    end
+    mon.setBackgroundColor(frameColor)
+    mon.setTextColor(colors.white)
+end
+
+local function spinStep()
+    local done = true
+    for i=1,3 do
+        if os.clock() < spinStopTimes[i] then
+            spinOffsets[i] = (spinOffsets[i] + 1) % #symbols
+            done = false
+        end
+    end
+    local displayReels = {}
+    for i=1,3 do
+        displayReels[i] = (reels[i] + spinOffsets[i]) % #symbols + 1
+    end
+    drawReelsFromIndices(displayReels)
+    return done, displayReels
+end
+
+local function checkWin(r)
+    local n1, n2, n3 = symbols[r[1]].name, symbols[r[2]].name, symbols[r[3]].name
+    
+    -- Jackpot
+    if n1 == "N" and n2 == "N" and n3 == "N" then
+        return "jackpot", "N"
+    end
+
+    -- Triple win (with probability)
+    for _, sym in pairs(symbols) do
+        if n1 == sym.name and n2 == sym.name and n3 == sym.name then
+            local chance = tripleWinRates[sym.name] or 0
+            if math.random(100) <= chance then
+                return "win", sym.name
+            end
+        end
+    end
+
+    -- Pity win: exactly two Ns and symbol eligible
+    local nCount = 0
+    if n1 == "N" then nCount = nCount + 1 end
+    if n2 == "N" then nCount = nCount + 1 end
+    if n3 == "N" then nCount = nCount + 1 end
+    if nCount == 2 and pityEligibility["N"] then
+        return "pity", "N"
+    end
+
+    return "lose", nil
+end
+
+local function calculatePayout(result, symName)
+    if result == "jackpot" then
+        return baseJackpot + jackpotCounter
+    elseif result == "win" then
+        return winPayouts[symName] or 0
+    elseif result == "pity" then
+        return pityPayout
+    else
+        return 0
+    end
+end
+
+local function dispenseItems(amount)
+    dispensing = true
+    if dropperPeripheral and type(dropperPeripheral.drop) == "function" then
+        for i=1, amount do
+            pcall(function() dropperPeripheral.drop(1) end)
+            sleep(0.2)
+        end
+    else
+        for i=1, amount do
+            if dropperSide then
+                redstone.setOutput(dropperSide, true)
+                sleep(0.25)
+                redstone.setOutput(dropperSide, false)
+            else sleep(0.25) end
+            sleep(0.1)
+        end
+    end
+    dispensing = false
+end
+
+local function startFlash(text, color)
+    if flashTimerId then pcall(os.cancelTimer, flashTimerId) end
+    flashing = true
+    flashText = text
+    flashColor = color
+    flashOn = false
+    flashIter = 0
+    flashTotalToggles = flashCount * 2
+    flashTimerId = os.startTimer(flashSpeed)
+end
+
+local function stopFlashAndClear()
+    if flashTimerId then pcall(os.cancelTimer, flashTimerId) end
+    flashing = false
+    flashIter = 0
+    flashOn = false
+    clearBottomText()
+end
+
+-- Initial draw
+mon.setBackgroundColor(frameColor)
+mon.clear()
+displayJackpot()
+clearBottomText()
+drawReelsFromIndices(reels)
+
+-- ===============================
+-- MAIN EVENT LOOP
+-- ===============================
+while true do
+    local event, param = os.pullEvent()
+
+    if event == "redstone" then
+        local input = redstone.getInput(spinInputSide)
+        if input and not lastRedstoneInput then
+            if previousResultVisible then
+                if clearTimerId then pcall(os.cancelTimer, clearTimerId) end
+                stopFlashAndClear()
+                previousResultVisible = false
+            end
+            if not spinning and not dispensing then
+                for i=1,3 do reels[i] = math.random(#symbols) end
+                spinOffsets = {0,0,0}
+                for i=1,3 do spinStopTimes[i] = os.clock() + spinTime[i] end
+                spinning = true
+                if spinTimerId then pcall(os.cancelTimer, spinTimerId) end
+                spinTimerId = os.startTimer(spinSpeed)
+                jackpotCounter = math.min(jackpotCounter + 1, jackpotCap - baseJackpot)
+                displayJackpot()
+                if spinOutputSide then redstone.setOutput(spinOutputSide, true) end
+            end
+        end
+        lastRedstoneInput = input
+
+    elseif event == "timer" then
+        if param == spinTimerId then
+            if spinning and not dispensing then
+                local done, displayReels = spinStep()
+                safePlayNote(math.random(10,20))
+                if done then
+                    spinning = false
+                    reels = displayReels
+                    if spinOutputSide then redstone.setOutput(spinOutputSide, false) end
+                    local result, symName = checkWin(reels)
+                    local payout = calculatePayout(result, symName)
+                    if debugMode then
+                        print("Result:", result, "sym:", tostring(symName), "payout:", payout)
+                    end
+                    if payout > 0 then dispenseItems(payout) end
+                    if result == "jackpot" then jackpotCounter = 0 end
+                    displayJackpot()
+                    local text, color
+                    if result == "jackpot" then text="JACKPOT!"; color=jackpotColor
+                    elseif result=="win" then text="WIN!"; color=winColor
+                    elseif result=="pity" then text="PITY WIN!"; color=pityColor
+                    else text="LOSE!"; color=loseColor end
+                    displayResultText(text, colors.white)
+                    startFlash(text, color)
+                    previousResultVisible = true
+                    if clearTimerId then pcall(os.cancelTimer, clearTimerId) end
+                    clearTimerId = os.startTimer(3)
+                else
+                    spinTimerId = os.startTimer(spinSpeed)
+                end
+            end
+
+        elseif param == flashTimerId then
+            if flashing then
+                flashOn = not flashOn
+                flashIter = flashIter + 1
+                if flashOn then displayResultText(flashText, flashColor)
+                else displayResultText(flashText, colors.white) end
+                if flashIter >= flashTotalToggles then
+                    displayResultText(flashText, flashColor)
+                    flashing = false
+                    flashTimerId = nil
+                    flashIter = 0
+                    flashOn = false
+                else flashTimerId = os.startTimer(flashSpeed) end
+            end
+
+        elseif param == clearTimerId then
+            stopFlashAndClear()
+            previousResultVisible = false
+            clearTimerId = nil
+        end
+    end
+end
