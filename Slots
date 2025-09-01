@@ -1,23 +1,20 @@
--- slotmachine_small_monitor.lua
--- Slot machine for tiny monitors: symbols persistent, results via flash and sound
+-- slotmachine_final.lua
+-- Centered reels, persistent symbols, edge-detected redstone spins
 
 -- ===============================
 -- SETTINGS
 -- ===============================
-
 local monitorSide = "right"
 local dropperSide = "back"
 local speakerSide = "top"
-local spinInputSide = "left"   -- redstone input side to trigger a spin
-local spinOutputSide = "bottom" -- redstone output side for spinning indicator
+local spinInputSide = "left"     -- redstone input side
+local spinOutputSide = "bottom"  -- spinning indicator
 
--- Colors
 local frameColor = colors.blue
 local slotWindowBgColor = colors.gray
 local symbolBgColor = colors.gray
 local jackpotCounterColor = colors.yellow
 
--- Symbols (letters only, text color)
 local symbols = {
     {name="G", color=colors.yellow},
     {name="D", color=colors.lightBlue},
@@ -27,19 +24,11 @@ local symbols = {
     {name="N", color=colors.black} -- Jackpot
 }
 
--- Spin animation settings
-local spinTime = {1.0, 1.6, 2.2}
+local spinTime = {1.0,1.6,2.2}
 local spinSpeed = 0.1
-
--- Jackpot settings
 local baseJackpot = 10
 local jackpotCounter = 0
-
--- Player money variable (internal)
-local playerMoney = 100  -- starting money
-
--- ===============================
--- END SETTINGS
+local playerMoney = 100
 -- ===============================
 
 -- Peripheral setup
@@ -54,13 +43,22 @@ local function note(p)
     if spk then spk.playNote("harp",3,p) end
 end
 
+local function displayJackpot()
+    local text = "J:"..(baseJackpot+jackpotCounter)
+    mon.setCursorPos(width - #text +1, 1)
+    mon.setBackgroundColor(frameColor)
+    mon.setTextColor(jackpotCounterColor)
+    mon.write(text)
+end
+
 local function drawReels(reels)
-    local startCol = 1
+    local startCol = math.floor((width-3)/2)+1
+    local startRow = math.floor((height-3)/2)+1
     for col=1,3 do
         for row=1,3 do
-            local idx = ((reels[col] + row - 2 -1) % #symbols) + 1
+            local idx = ((reels[col] + row - 2 -1) % #symbols)+1
             local sym = symbols[idx]
-            mon.setCursorPos(col, row)
+            mon.setCursorPos(startCol + col -1, startRow + row -1)
             mon.setBackgroundColor(symbolBgColor)
             mon.setTextColor(sym.color)
             mon.write(sym.name)
@@ -68,22 +66,11 @@ local function drawReels(reels)
     end
 end
 
-local function displayJackpot()
-    local text = "J:" .. (baseJackpot + jackpotCounter)
-    mon.setCursorPos(width - #text + 1, 1)
-    mon.setBackgroundColor(frameColor)
-    mon.setTextColor(jackpotCounterColor)
-    mon.write(text)
-end
-
 local function spin()
     local reels = {math.random(#symbols), math.random(#symbols), math.random(#symbols)}
     local offsets = {0,0,0}
     local stopTimes = {os.clock()+spinTime[1], os.clock()+spinTime[2], os.clock()+spinTime[3]}
-
-    -- Turn on spinning indicator
     redstone.setOutput(spinOutputSide,true)
-
     while true do
         local done = true
         for i=1,3 do
@@ -92,20 +79,17 @@ local function spin()
                 done = false
             end
         end
-        local displayReels = {}
-        for i=1,3 do displayReels[i] = (reels[i] + offsets[i]) % #symbols + 1 end
+        local displayReels={}
+        for i=1,3 do displayReels[i]=(reels[i]+offsets[i])%#symbols+1 end
         drawReels(displayReels)
         note(math.random(10,20))
         sleep(spinSpeed)
         if done then break end
     end
-
-    -- Turn off spinning indicator
     redstone.setOutput(spinOutputSide,false)
-
-    local final = {}
-    for i=1,3 do final[i] = (reels[i] + offsets[i]) % #symbols + 1 end
-    drawReels(final) -- keep final reels visible
+    local final={}
+    for i=1,3 do final[i]=(reels[i]+offsets[i])%#symbols+1 end
+    drawReels(final)
     return final
 end
 
@@ -138,25 +122,24 @@ local function playJingle(result)
     elseif result=="lose" then note(20) sleep(0.2) note(16) sleep(0.2) note(12) end
 end
 
--- Flash center symbol for result
 local function flashResult(result)
-    local centerX, centerY = 2,2
-    local sym = symbols[math.random(#symbols)]
+    local startCol = math.floor((width-3)/2)+2
+    local startRow = math.floor((height-3)/2)+2
+    local symIdx = math.random(#symbols)
     local color
-    if result=="jackpot" then color = colors.lime
-    elseif result=="win" then color = colors.green
-    else color = colors.red end
-
+    if result=="jackpot" then color=colors.lime
+    elseif result=="win" then color=colors.green
+    else color=colors.red end
     for i=1,6 do
-        mon.setCursorPos(centerX, centerY)
+        mon.setCursorPos(startCol,startRow)
         mon.setBackgroundColor(color)
         mon.setTextColor(colors.white)
-        mon.write(symbols[sym].name)
+        mon.write(symbols[symIdx].name)
         sleep(0.25)
-        mon.setCursorPos(centerX, centerY)
+        mon.setCursorPos(startCol,startRow)
         mon.setBackgroundColor(symbolBgColor)
-        mon.setTextColor(symbols[sym].color)
-        mon.write(symbols[sym].name)
+        mon.setTextColor(symbols[symIdx].color)
+        mon.write(symbols[symIdx].name)
         sleep(0.25)
     end
 end
@@ -174,10 +157,8 @@ displayJackpot()
 
 -- Main loop
 while true do
-    -- Wait for redstone input
-    repeat
-        os.pullEvent("redstone")
-    until redstone.getInput(spinInputSide)
+    -- Wait for redstone rising edge
+    while redstone.getInput(spinInputSide)==false do os.pullEvent("redstone") end
 
     playerMoney = playerMoney - 1
     jackpotCounter = jackpotCounter + 1
@@ -200,8 +181,6 @@ while true do
     flashResult(result)
     displayJackpot()
 
-    -- Wait until redstone input goes low before next spin
-    while redstone.getInput(spinInputSide) do
-        os.pullEvent("redstone")
-    end
+    -- Wait for redstone to go low before next spin
+    while redstone.getInput(spinInputSide)==true do os.pullEvent("redstone") end
 end
