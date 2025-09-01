@@ -8,9 +8,8 @@ local PAYOUTS = {I=2,B=3,E=4,D=5,G=6}
 local PITY_PAYOUTS = {I=0,B=0,E=0,D=0,G=0,N=1}
 local DEBUG = false
 
--- Background colors
-local MONITOR_BG = colors.gray        -- overall monitor background
-local SYMBOL_BG = colors.lightGray    -- background behind symbols/text
+-- Monitor background color (applied to the single character)
+local MONITOR_BG = colors.gray
 
 -------------------------
 -- PERIPHERALS
@@ -24,7 +23,6 @@ if not dropper then error("No dropper on back") end
 
 monitor.setBackgroundColor(MONITOR_BG)
 monitor.clear()
-if monitor.setTextScale then monitor.setTextScale(1) end
 
 -------------------------
 -- STATE VARIABLES
@@ -36,26 +34,26 @@ local resultText,resultColor = nil,nil
 -------------------------
 -- HELPER FUNCTIONS
 -------------------------
-local function draw(text,color,bg)
+local function draw(char,color)
     monitor.setCursorPos(1,1)
     monitor.setTextColor(color or colors.white)
-    monitor.setBackgroundColor(bg or SYMBOL_BG)
+    monitor.setBackgroundColor(MONITOR_BG)
     monitor.clear()
-    monitor.write(text)
+    monitor.write(char)
 end
 
 local function playSound(name,pitch) speaker.playSound(name,1,pitch) end
 local function dispense(count) for i=1,count do dropper.drop(1) sleep(0.1) end end
 
-local function flashResult(text,color)
+local function flashResult(char,color)
     local flashes = 6
     local flashColors = {colors.white,color}
     for i=1,flashes do
-        if spinning then return end -- interrupt if new spin
-        draw(text,flashColors[(i%2)+1],SYMBOL_BG)
+        if spinning then return end
+        draw(char,flashColors[(i%2)+1])
         sleep(0.3)
     end
-    draw(text,color,SYMBOL_BG)
+    draw(char,color)
 end
 
 -------------------------
@@ -71,7 +69,7 @@ end
 
 local function handleTriple(symbol)
     local payout = PAYOUTS[symbol] or 1
-    resultText = "WIN+"..payout
+    resultText = "W" -- can't show full WIN+X, just "W"
     resultColor = colors.green
     dispense(payout)
     jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
@@ -81,7 +79,7 @@ end
 local function handlePity(symbol)
     local payout = PITY_PAYOUTS[symbol]
     if payout and payout>0 then
-        resultText = "PITY+"..payout
+        resultText = "P"
         resultColor = colors.orange
         dispense(payout)
         jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
@@ -92,7 +90,7 @@ local function handlePity(symbol)
 end
 
 local function handleLose()
-    resultText = "LOSE"
+    resultText = "L"
     resultColor = colors.red
     jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
     playSound("block.note_block.bass",0.8)
@@ -109,16 +107,14 @@ local function spin()
     local currentSymbol
     while os.clock()-startTime < SPIN_TIME do
         currentSymbol = SYMBOLS[math.random(#SYMBOLS)]
-        draw(currentSymbol,colors.yellow,SYMBOL_BG)
+        draw(currentSymbol,colors.yellow)
         playSound("block.note_block.hat",1)
         sleep(0.2)
     end
 
-    -- Final symbol
     currentSymbol = SYMBOLS[math.random(#SYMBOLS)]
-    draw(currentSymbol,colors.yellow,SYMBOL_BG)
+    draw(currentSymbol,colors.yellow)
 
-    -- Evaluate result
     if currentSymbol=="N" then
         handleJackpot()
     else
@@ -132,7 +128,6 @@ local function spin()
         end
     end
 
-    -- Flash only the result text
     flashResult(resultText,resultColor)
     spinning = false
 end
