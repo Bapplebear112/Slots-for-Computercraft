@@ -1,17 +1,19 @@
+-- Fully featured slot machine for CC-Tweaked
+
 -- ===============================
 -- SETTINGS
 -- ===============================
 local monitorSide = "right"
 local dropperSide = "back"
 local speakerSide = "top"
-local spinInputSide = "left"     -- redstone input
+local spinInputSide = "left"     -- redstone input to trigger spin
 local spinOutputSide = "bottom"  -- redstone spinning indicator
 
 local frameColor = colors.blue
 local symbolBgColor = colors.gray
 local jackpotCounterColor = colors.yellow
 
-local symbols = {
+local symbols = {  -- letters used as symbols
     {name="G", color=colors.yellow},
     {name="D", color=colors.lightBlue},
     {name="I", color=colors.lightGray},
@@ -22,7 +24,9 @@ local symbols = {
 
 local spinTime = {1.0,1.6,2.2}
 local spinSpeed = 0.1
+
 local baseJackpot = 10
+local jackpotCap = 128   -- maximum jackpot amount
 local jackpotCounter = 0
 local playerMoney = 100
 -- ===============================
@@ -161,18 +165,23 @@ mon.clear()
 displayJackpot()
 
 -- Main loop
+local previousResultVisible = false
 while true do
     -- Wait for redstone rising edge
     while redstone.getInput(spinInputSide)==false do os.pullEvent("redstone") end
 
-    -- Clear previous bottom text immediately if needed
-    displayResultText("      ", colors.white)
+    -- Clear previous result immediately if needed
+    if previousResultVisible then
+        displayResultText("      ", colors.white)
+        previousResultVisible = false
+    end
 
-    -- Spin
+    -- Deduct spin cost and update jackpot (capped)
     playerMoney = playerMoney - 1
-    jackpotCounter = jackpotCounter + 1
+    jackpotCounter = math.min(jackpotCounter + 1, jackpotCap - baseJackpot)
     displayJackpot()
 
+    -- Spin reels
     local reels = spin()
     local result = checkWin(reels)
     local payout = calculatePayout(result)
@@ -195,6 +204,7 @@ while true do
     else
         displayResultText("LOSE!", colors.red)
     end
+    previousResultVisible = true
 
     playJingle(result)
     flashResult(result)
@@ -206,13 +216,13 @@ while true do
         local event,id = os.pullEvent()
         if event=="timer" and id==resultTimer then
             displayResultText("      ", colors.white)
+            previousResultVisible = false
             break
         elseif event=="redstone" and redstone.getInput(spinInputSide) then
-            displayResultText("      ", colors.white)
-            break
+            break -- next spin will clear automatically
         end
     end
 
-    -- Wait until redstone goes low before next spin
+    -- Wait until input goes low before next spin
     while redstone.getInput(spinInputSide) do os.pullEvent("redstone") end
 end
