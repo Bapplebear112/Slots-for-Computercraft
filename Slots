@@ -1,5 +1,5 @@
--- slotmachine_redstone_persistent.lua
--- Slot machine: reels persistent, result auto-clear after 3s, jackpot visible
+-- slotmachine_small_monitor.lua
+-- Slot machine for tiny monitors: symbols persistent, results via flash and sound
 
 -- ===============================
 -- SETTINGS
@@ -11,21 +11,10 @@ local speakerSide = "top"
 local spinInputSide = "left"   -- redstone input side to trigger a spin
 local spinOutputSide = "bottom" -- redstone output side for spinning indicator
 
--- Text labels
-local spinText = "SPIN!"
-local winText = "WIN!"
-local jackpotText = "JACKPOT!"
-local loseText = "LOSE!"
-local jackpotLabel = "Jackpot: "  -- visible on screen
-
 -- Colors
 local frameColor = colors.blue
 local slotWindowBgColor = colors.gray
-local spinTextColor = colors.white
-local winTextColor = colors.green
-local jackpotTextColor = colors.lime
-local loseTextColor = colors.red
-local symbolBgColor = colors.gray  -- all symbols share this background
+local symbolBgColor = colors.gray
 local jackpotCounterColor = colors.yellow
 
 -- Symbols (letters only, text color)
@@ -41,14 +30,13 @@ local symbols = {
 -- Spin animation settings
 local spinTime = {1.0, 1.6, 2.2}
 local spinSpeed = 0.1
-local resultDisplayTime = 3
 
 -- Jackpot settings
 local baseJackpot = 10
 local jackpotCounter = 0
 
 -- Player money variable (internal)
-local playerMoney = 100  -- example starting amount
+local playerMoney = 100  -- starting money
 
 -- ===============================
 -- END SETTINGS
@@ -61,64 +49,40 @@ mon.setTextScale(0.5)
 mon.clear()
 local width, height = mon.getSize()
 
--- Sound helper
+-- Helper functions
 local function note(p)
     if spk then spk.playNote("harp",3,p) end
 end
 
--- Draw slot window background (only reel area)
-local function drawSlotWindow()
-    local startCol = math.floor((width-3)/2)+1
-    mon.setBackgroundColor(slotWindowBgColor)
-    for y=2,4 do
-        mon.setCursorPos(startCol, y)
-        mon.write("   ") -- only overwrite reel area
-    end
-end
-
--- Center text helper
-local function centerText(y, text, color)
-    local x = math.floor((width-#text)/2)+1
-    mon.setCursorPos(x, y)
-    mon.setTextColor(color or colors.white)
-    mon.write(text)
-end
-
--- Draw reels with uniform background
 local function drawReels(reels)
-    local startCol = math.floor((width-3)/2)+1
+    local startCol = 1
     for col=1,3 do
-        local x = startCol + col - 1
         for row=1,3 do
             local idx = ((reels[col] + row - 2 -1) % #symbols) + 1
             local sym = symbols[idx]
-            mon.setCursorPos(x, row+1)
+            mon.setCursorPos(col, row)
             mon.setBackgroundColor(symbolBgColor)
             mon.setTextColor(sym.color)
             mon.write(sym.name)
         end
     end
-    mon.setBackgroundColor(frameColor)
-    mon.setTextColor(colors.white)
 end
 
--- Display jackpot counter (always visible)
 local function displayJackpot()
-    local text = jackpotLabel .. (baseJackpot + jackpotCounter)
+    local text = "J:" .. (baseJackpot + jackpotCounter)
     mon.setCursorPos(width - #text + 1, 1)
-    mon.setTextColor(jackpotCounterColor)
     mon.setBackgroundColor(frameColor)
+    mon.setTextColor(jackpotCounterColor)
     mon.write(text)
 end
 
--- Spin animation
 local function spin()
     local reels = {math.random(#symbols), math.random(#symbols), math.random(#symbols)}
     local offsets = {0,0,0}
     local stopTimes = {os.clock()+spinTime[1], os.clock()+spinTime[2], os.clock()+spinTime[3]}
 
     -- Turn on spinning indicator
-    redstone.setOutput(spinOutputSide, true)
+    redstone.setOutput(spinOutputSide,true)
 
     while true do
         local done = true
@@ -128,7 +92,6 @@ local function spin()
                 done = false
             end
         end
-        drawSlotWindow()
         local displayReels = {}
         for i=1,3 do displayReels[i] = (reels[i] + offsets[i]) % #symbols + 1 end
         drawReels(displayReels)
@@ -137,16 +100,15 @@ local function spin()
         if done then break end
     end
 
+    -- Turn off spinning indicator
+    redstone.setOutput(spinOutputSide,false)
+
     local final = {}
     for i=1,3 do final[i] = (reels[i] + offsets[i]) % #symbols + 1 end
-
-    -- Turn off spinning indicator
-    redstone.setOutput(spinOutputSide, false)
-
+    drawReels(final) -- keep final reels visible
     return final
 end
 
--- Check win
 local function checkWin(reels)
     local s1,s2,s3 = symbols[reels[1]].name, symbols[reels[2]].name, symbols[reels[3]].name
     if s1=="N" and s2=="N" and s3=="N" then return "jackpot"
@@ -155,15 +117,13 @@ local function checkWin(reels)
     end
 end
 
--- Money dispensing helper
 local function dispenseMoney(amount)
-    if amount > 0 then
-        print("Dispensed "..amount.." money!") -- only show positive payouts
+    if amount>0 then
+        print("Dispensed "..amount.." money!")
         playerMoney = playerMoney + amount
     end
 end
 
--- Redstone dispenser for items
 local function dispenseItems(jackpot)
     redstone.setOutput(dropperSide,true) sleep(0.3) redstone.setOutput(dropperSide,false)
     if jackpot then
@@ -171,7 +131,6 @@ local function dispenseItems(jackpot)
     end
 end
 
--- Play sound
 local function playJingle(result)
     if not spk then return end
     if result=="jackpot" then for i=12,20,2 do note(i) sleep(0.1) end
@@ -179,106 +138,70 @@ local function playJingle(result)
     elseif result=="lose" then note(20) sleep(0.2) note(16) sleep(0.2) note(12) end
 end
 
--- Display result on bottom line (auto-clear after 3s or next spin)
-local function displayResult(text, color)
-    mon.setTextScale(1)
-    centerText(height, text, color) -- bottom line
-    mon.setTextScale(0.5)
-    displayJackpot() -- redraw jackpot in case overwritten
+-- Flash center symbol for result
+local function flashResult(result)
+    local centerX, centerY = 2,2
+    local sym = symbols[math.random(#symbols)]
+    local color
+    if result=="jackpot" then color = colors.lime
+    elseif result=="win" then color = colors.green
+    else color = colors.red end
+
+    for i=1,6 do
+        mon.setCursorPos(centerX, centerY)
+        mon.setBackgroundColor(color)
+        mon.setTextColor(colors.white)
+        mon.write(symbols[sym].name)
+        sleep(0.25)
+        mon.setCursorPos(centerX, centerY)
+        mon.setBackgroundColor(symbolBgColor)
+        mon.setTextColor(symbols[sym].color)
+        mon.write(symbols[sym].name)
+        sleep(0.25)
+    end
 end
 
--- Calculate payout
 local function calculatePayout(result)
-    if result == "jackpot" then
-        return baseJackpot + jackpotCounter
-    elseif result == "win" then
-        return math.floor((baseJackpot + jackpotCounter)/2)
-    else
-        return 0
-    end
+    if result=="jackpot" then return baseJackpot+jackpotCounter
+    elseif result=="win" then return math.floor((baseJackpot+jackpotCounter)/2)
+    else return 0 end
 end
 
 -- Initial setup
 mon.setBackgroundColor(frameColor)
 mon.clear()
-centerText(1, spinText, spinTextColor)
 displayJackpot()
 
--- Keep track of currently displayed result timer
-local resultTimer = nil
-
--- Main loop (redstone activated spin)
+-- Main loop
 while true do
     -- Wait for redstone input
     repeat
-        local event, side = os.pullEvent("redstone")
-    until redstone.getInput(spinInputSide) == true
+        os.pullEvent("redstone")
+    until redstone.getInput(spinInputSide)
 
-    -- Cancel previous result timer if any
-    if resultTimer then
-        os.cancelTimer(resultTimer)
-        resultTimer = nil
-        mon.setTextScale(1)
-        centerText(height, "      ", spinTextColor)
-        mon.setTextScale(0.5)
-        displayJackpot()
-    end
-
-    -- Deduct spin cost silently
     playerMoney = playerMoney - 1
-
-    -- Increase jackpot counter
     jackpotCounter = jackpotCounter + 1
     displayJackpot()
 
-    -- Spin reels
     local reels = spin()
-    drawReels(reels) -- keep reels visible
-
-    -- Check result
     local result = checkWin(reels)
     local payout = calculatePayout(result)
 
-    if result == "jackpot" then
-        displayResult(jackpotText, jackpotTextColor)
+    if result=="jackpot" then
         dispenseMoney(payout)
         dispenseItems(true)
         jackpotCounter = 0
-        displayJackpot()
-    elseif result == "win" then
-        displayResult(winText, winTextColor)
+    elseif result=="win" then
         dispenseMoney(payout)
         dispenseItems(false)
-    else
-        displayResult(loseText, loseTextColor)
     end
 
     playJingle(result)
-
-    -- Auto-clear result after 3 seconds
-    resultTimer = os.startTimer(resultDisplayTime)
-    while true do
-        local event, id = os.pullEvent()
-        if event == "timer" and id == resultTimer then
-            mon.setTextScale(1)
-            centerText(height, "      ", spinTextColor)
-            mon.setTextScale(0.5)
-            displayJackpot()
-            resultTimer = nil
-            break
-        elseif event == "redstone" and redstone.getInput(spinInputSide) == true then
-            -- Another spin initiated, clear result immediately
-            mon.setTextScale(1)
-            centerText(height, "      ", spinTextColor)
-            mon.setTextScale(0.5)
-            displayJackpot()
-            resultTimer = nil
-            break
-        end
-    end
+    flashResult(result)
+    displayJackpot()
 
     -- Wait until redstone input goes low before next spin
-    while redstone.getInput(spinInputSide) == true do
+    while redstone.getInput(spinInputSide) do
         os.pullEvent("redstone")
     end
 end
