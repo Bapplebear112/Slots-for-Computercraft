@@ -6,11 +6,9 @@ local SPIN_TIME = 1.5
 local JACKPOT_CAP = 128
 local PAYOUTS = {I=2,B=3,E=4,D=5,G=6}
 local PITY_PAYOUTS = {I=0,B=0,E=0,D=0,G=0,N=1}
-local DEBUG = false
 
--- Colors
 local MONITOR_BG = colors.gray        -- monitor background
-local SYMBOL_BG = colors.lightGray    -- behind symbols/text
+local SYMBOL_BG = colors.lightGray    -- symbol background
 
 -------------------------
 -- PERIPHERALS
@@ -75,7 +73,7 @@ end
 
 local function handleTriple(symbol)
     local payout = PAYOUTS[symbol] or 1
-    resultText = "WIN+"..payout
+    resultText = "WIN"
     resultColor = colors.green
     dispense(payout)
     jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
@@ -85,7 +83,7 @@ end
 local function handlePity(symbol)
     local payout = PITY_PAYOUTS[symbol]
     if payout and payout>0 then
-        resultText = "PITY+"..payout
+        resultText = "PITY"
         resultColor = colors.orange
         dispense(payout)
         jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
@@ -109,21 +107,26 @@ local function spin()
     spinning = true
     resultText,resultColor = nil,nil
     clearMonitor()
-    
+
     local w,h = monitor.getSize()
     local middleY = math.floor(h/2)
-    local symbolX = {math.floor(w/4), math.floor(w/2), math.floor(3*w/4)}
+    
+    -- Calculate X positions for 3 symbols centered
+    local symbolWidth = 1
+    local totalWidth = 3*symbolWidth + 2 -- 2 spaces between symbols
+    local startX = math.floor((w-totalWidth)/2)+1
+    local symbolX = {startX, startX+2, startX+4}
 
     local startTime = os.clock()
     local reels = {" "," "," "}
-    
+
     -- Spin animation
     while os.clock()-startTime < SPIN_TIME do
         for i=1,3 do
             reels[i] = SYMBOLS[math.random(#SYMBOLS)]
             drawAt(symbolX[i],middleY,reels[i],colors.yellow,SYMBOL_BG)
         end
-        drawAt(symbolX[2],middleY-1,"v",colors.red,SYMBOL_BG) -- arrow pointing at middle
+        drawAt(symbolX[2],middleY-1,"v",colors.red,SYMBOL_BG) -- arrow above middle
         playSound("block.note_block.hat",1)
         sleep(0.2)
     end
@@ -134,8 +137,8 @@ local function spin()
         drawAt(symbolX[i],middleY,reels[i],colors.yellow,SYMBOL_BG)
     end
     drawAt(symbolX[2],middleY-1,"v",colors.red,SYMBOL_BG)
-    
-    -- Evaluate middle symbol (payline)
+
+    -- Evaluate middle symbol
     local middleSymbol = reels[2]
     if middleSymbol=="N" then
         handleJackpot()
@@ -150,11 +153,12 @@ local function spin()
         end
     end
 
-    -- Draw jackpot counter top-right
-    drawAt(w-12,1,"JP:"..jackpotCounter,colors.white,SYMBOL_BG)
+    -- Jackpot counter top-right
+    drawAt(w-7,1,"JP:"..jackpotCounter,colors.white,SYMBOL_BG)
 
     -- Flash result below symbols
-    flashResult(resultText,resultColor,symbolX[2],middleY+1)
+    local resultY = middleY+1
+    flashResult(resultText,resultColor,symbolX[2],resultY)
 
     spinning = false
 end
