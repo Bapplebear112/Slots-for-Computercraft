@@ -1,7 +1,3 @@
--- slotmachine_cc_fixed.lua
--- Timer-driven slot machine with proper monitor/speaker/dropper peripheral usage,
--- single-press spins, non-blocking flash, adjustable win rates, pity wins.
-
 -- ===============================
 -- SETTINGS (edit these)
 -- ===============================
