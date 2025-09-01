@@ -1,172 +1,185 @@
--------------------
--- SETTINGS
--------------------
-local monitorSide = "top"
-local speakerSide = "left"
-local dropperSide = "back"
-local buttonSide = "right"
+-------------------------
+-- SLOT MACHINE SETTINGS
+-------------------------
+local SYMBOLS = {"I", "B", "E", "D", "G", "N"} -- slot symbols
+local SPIN_TIME = 1.5
+local JACKPOT_CAP = 128
 
-local bgColor = colors.blue
-local symbolBgColor = colors.black
-local textColor = colors.white
-
-local spinDelay = 0.1
-local messageTime = 3
-local maxJackpot = 128
-local jackpotBase = 10
-
-local debugMode = false
-
--- SYMBOLS AND PAYOUTS
--- symbol = {threeMatch = X, twoMatch = Y}
--- If twoMatch = 0 or nil, no pity reward for that symbol
-local symbols = {
-  I = {threeMatch = 5, twoMatch = 0},   -- Iron
-  B = {threeMatch = 4, twoMatch = 0},   -- Blaze
-  E = {threeMatch = 3, twoMatch = 0},   -- Emerald
-  N = {threeMatch = 10, twoMatch = 1},  -- Netherite
-  D = {threeMatch = 6, twoMatch = 0},   -- Diamond
-  G = {threeMatch = 2, twoMatch = 0},   -- Gold
+-- payout table for triple matches
+local PAYOUTS = {
+    I = 2,
+    B = 3,
+    E = 4,
+    D = 5,
+    G = 6,
 }
 
--------------------
--- INIT
--------------------
-local monitor = peripheral.wrap(monitorSide)
-local speaker = peripheral.wrap(speakerSide)
-redstone.setOutput(dropperSide, false)
+-- pity payouts (disabled unless you add a number)
+-- Only N is enabled by default
+local PITY_PAYOUTS = {
+    I = 0, -- disabled
+    B = 0, -- disabled
+    E = 0, -- disabled
+    D = 0, -- disabled
+    G = 0, -- disabled
+    N = 1, -- pity reward enabled (1 emerald)
+}
 
-monitor.setTextScale(1)
-monitor.setBackgroundColor(bgColor)
-monitor.setTextColor(textColor)
+local DEBUG = false
+
+-------------------------
+-- PERIPHERALS
+-------------------------
+local monitor = peripheral.wrap("right")
+local speaker = peripheral.wrap("top")
+local dropper = peripheral.wrap("back")
+
+if not monitor then error("No monitor on right") end
+if not speaker then error("No speaker on top") end
+if not dropper then error("No dropper on back") end
+
+monitor.setBackgroundColor(colors.black)
 monitor.clear()
+if monitor.setTextScale then monitor.setTextScale(1) end
 
-local jackpot = 0
+-------------------------
+-- STATE VARIABLES
+-------------------------
+local jackpotCounter = 10
 local spinning = false
-local lastMessageTime = 0
-local lastMessage = ""
+local resultText = nil
+local resultColor = nil
 
-local symbolList = {}
-for sym,_ in pairs(symbols) do
-    table.insert(symbolList, sym)
+-------------------------
+-- HELPER FUNCTIONS
+-------------------------
+local function drawCentered(y, text, color, bg)
+    local w, _ = monitor.getSize()
+    local x = math.floor((w - #text) / 2) + 1
+    monitor.setCursorPos(x, y)
+    monitor.setTextColor(color or colors.white)
+    monitor.setBackgroundColor(bg or colors.black)
+    monitor.write(text)
 end
 
--------------------
--- FUNCTIONS
--------------------
-local function centerWrite(y, text, color)
-  local w, _ = monitor.getSize()
-  monitor.setCursorPos(math.floor((w - #text) / 2) + 1, y)
-  monitor.setTextColor(color or textColor)
-  monitor.write(text)
+local function playSound(name, pitch)
+    speaker.playSound(name, 1, pitch)
 end
 
-local function drawSlots(result)
-  local w, h = monitor.getSize()
-  local row = math.floor(h / 2)
-
-  for i, sym in ipairs(result) do
-    local col = math.floor(w/2 - 2 + i)
-    monitor.setCursorPos(col, row)
-    monitor.setBackgroundColor(symbolBgColor)
-    monitor.write(sym)
-    monitor.setBackgroundColor(bgColor)
-  end
+local function dispense(count)
+    for i = 1, count do
+        dropper.drop(1)
+        sleep(0.1)
+    end
 end
 
-local function drawJackpot()
-  local w, h = monitor.getSize()
-  monitor.setCursorPos(2, h)
-  monitor.setTextColor(colors.yellow)
-  monitor.write("Jackpot: " .. jackpot)
-  monitor.setTextColor(textColor)
+-------------------------
+-- PAYOUT LOGIC
+-------------------------
+local function handleJackpot()
+    resultText = "JACKPOT!"
+    resultColor = colors.green
+    dispense(jackpotCounter)
+    jackpotCounter = 10
+    playSound("entity.player.levelup", 1.2)
 end
 
-local function spinSlots()
-  local result = {}
-  for i = 1, 3 do
-      result[i] = symbolList[math.random(1, #symbolList)]
-  end
-
-  for _ = 1, 8 do
-      local temp = {}
-      for i = 1, 3 do
-          temp[i] = symbolList[math.random(1, #symbolList)]
-      end
-      monitor.clear()
-      drawSlots(temp)
-      drawJackpot()
-      sleep(spinDelay)
-  end
-
-  monitor.clear()
-  drawSlots(result)
-  drawJackpot()
-  return result
+local function handleTriple(symbol)
+    local payout = PAYOUTS[symbol] or 1
+    resultText = "WIN +" .. payout
+    resultColor = colors.green
+    dispense(payout)
+    jackpotCounter = math.min(jackpotCounter + 1, JACKPOT_CAP)
+    playSound("entity.player.levelup", 1)
 end
 
-local function payout(amount)
-  if amount <= 0 then return end
-  redstone.setOutput(dropperSide, true)
-  sleep(amount * 0.2)
-  redstone.setOutput(dropperSide, false)
+local function handlePity(symbol)
+    local payout = PITY_PAYOUTS[symbol]
+    if payout and payout > 0 then
+        resultText = "PITY +" .. payout
+        resultColor = colors.orange
+        dispense(payout)
+        jackpotCounter = math.min(jackpotCounter + 1, JACKPOT_CAP)
+        playSound("block.note_block.bell", 1.2)
+    else
+        handleLose()
+    end
 end
 
-local function checkWin(result)
-  local counts = {}
-  for _, sym in ipairs(result) do
-      counts[sym] = (counts[sym] or 0) + 1
-  end
-
-  -- Jackpot special: 3 N
-  if counts["N"] == 3 then
-      local reward = jackpotBase + jackpot
-      jackpot = 0
-      return "JACKPOT!", reward, colors.green
-  end
-
-  for sym, count in pairs(counts) do
-      if count == 3 then
-          return "WIN!", symbols[sym].threeMatch, colors.lime
-      elseif count == 2 and symbols[sym].twoMatch and symbols[sym].twoMatch > 0 then
-          return "PITY!", symbols[sym].twoMatch, colors.cyan
-      end
-  end
-
-  return "LOSE", 0, colors.red
+local function handleLose()
+    resultText = "LOSE"
+    resultColor = colors.red
+    jackpotCounter = math.min(jackpotCounter + 1, JACKPOT_CAP)
+    playSound("block.note_block.bass", 0.8)
 end
 
-local function showMessage(text, color)
-  local w, h = monitor.getSize()
-  centerWrite(h, text, color)
-  lastMessage = text
-  lastMessageTime = os.clock()
+-------------------------
+-- SPIN LOGIC
+-------------------------
+local function spin()
+    spinning = true
+    resultText, resultColor = nil, nil
+    monitor.clear()
+
+    local chosen = {}
+    local _, h = monitor.getSize()
+    local startRow = math.floor(h / 2) - 1
+
+    -- Animate reels
+    local startTime = os.clock()
+    while os.clock() - startTime < SPIN_TIME do
+        monitor.clear()
+        for c = 1, 3 do
+            local symbol = SYMBOLS[math.random(#SYMBOLS)]
+            drawCentered(startRow + c - 1, symbol, colors.yellow)
+        end
+        playSound("block.note_block.hat", 1)
+        sleep(0.2)
+    end
+
+    -- Final symbols
+    for c = 1, 3 do
+        chosen[c] = SYMBOLS[math.random(#SYMBOLS)]
+        drawCentered(startRow + c - 1, chosen[c], colors.yellow)
+    end
+
+    -- Evaluate result
+    if chosen[1] == chosen[2] and chosen[2] == chosen[3] then
+        if chosen[1] == "N" then
+            handleJackpot()
+        else
+            handleTriple(chosen[1])
+        end
+    elseif chosen[1] == chosen[2] or chosen[2] == chosen[3] or chosen[1] == chosen[3] then
+        handlePity(chosen[1]) -- only gives pity if PITY_PAYOUTS[symbol] > 0
+    else
+        handleLose()
+    end
+
+    -- Show result text
+    drawCentered(startRow + 3, resultText, resultColor)
+    spinning = false
 end
 
--------------------
+-------------------------
 -- MAIN LOOP
--------------------
+-------------------------
 while true do
-  os.pullEvent("redstone") -- wait for spin input
+    monitor.clear()
+    local w, h = monitor.getSize()
 
-  if redstone.getInput(buttonSide) and not spinning then
-      spinning = true
-      jackpot = math.min(jackpot + 1, maxJackpot)
+    monitor.setCursorPos(w - 12, 1)
+    monitor.setTextColor(colors.white)
+    monitor.write("Jackpot: " .. jackpotCounter)
 
-      local result = spinSlots()
-      local message, reward, color = checkWin(result)
+    if resultText then
+        drawCentered(h - 1, resultText, resultColor)
+    else
+        drawCentered(h - 1, "Press Button", colors.white)
+    end
 
-      payout(reward)
-      showMessage(message, color)
-
-      spinning = false
-  end
-
-  -- Clear old message after messageTime
-  if lastMessage ~= "" and os.clock() - lastMessageTime > messageTime then
-      local w, h = monitor.getSize()
-      monitor.setCursorPos(1, h)
-      monitor.clearLine()
-      lastMessage = ""
-  end
+    os.pullEvent("redstone")
+    if redstone.getInput("bottom") and not spinning then
+        spin()
+    end
 end
