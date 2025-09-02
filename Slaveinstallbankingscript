@@ -1,0 +1,130 @@
+-- install.lua (slave setup and auto-install slave.lua)
+local configFile = "config.db"
+local modem = peripheral.find("modem") or error("No wireless modem attached!", 0)
+
+-- Temporary registration channel
+local REG_CHANNEL = 100
+modem.open(REG_CHANNEL)
+
+if fs.exists(configFile) then
+    print("Slave already configured. Delete config.db to re-run setup.")
+    return
+end
+
+term.clear()
+term.setCursorPos(1,1)
+print("=== Slave Install ===")
+
+-- Area name
+write("Enter area name (example: Vault, Lobby, Office): ")
+local area = read()
+
+-- Required role
+write("Enter required role number to access this area (1=basic, etc): ")
+local requiredRole = tonumber(read())
+
+-- Function type
+print("Select slave function:")
+print("1. Redstone output (door, vault, light)")
+write("Choice: ")
+local funcChoice = read()
+local functionType = { type="redstone", side="back" } -- default
+if funcChoice == "1" then
+    print("Select which side of the computer will output redstone (top, bottom, left, right, front, back):")
+    write("Side: ")
+    local side = read()
+    functionType.side = side
+else
+    print("Invalid choice, defaulting to redstone on back")
+end
+
+-- Save config
+local config = {
+    area = area,
+    role = requiredRole,
+    functionType = functionType
+}
+local file = fs.open(configFile, "w")
+file.write(textutils.serializeJSON(config))
+file.close()
+
+-- Register with master
+print("Registering with master...")
+modem.transmit(REG_CHANNEL, REG_CHANNEL, {
+    type="register",
+    area=area,
+    role=requiredRole,
+    id=os.getComputerID(),
+    functionType=functionType
+})
+
+print("Setup complete! Slave registered as " .. area .. " (role " .. requiredRole .. ")")
+
+-- -------------------------------
+-- Auto-create slave.lua
+-- -------------------------------
+local slaveCode = [[
+-- slave.lua
+local configFile = "config.db"
+local modem = peripheral.find("modem") or error("No wireless modem attached!", 0)
+
+-- Load config
+if not fs.exists(configFile) then
+    error("Run install.lua first!")
+end
+
+local file = fs.open(configFile, "r")
+local config = textutils.unserializeJSON(file.readAll())
+file.close()
+
+local area = config.area
+local requiredRole = config.role
+local functionType = config.functionType
+
+-- Master communication channel
+local MASTER_CHANNEL = 50
+modem.open(MASTER_CHANNEL)
+
+-- Register on startup
+modem.transmit(MASTER_CHANNEL, MASTER_CHANNEL, {
+    type="register",
+    area=area,
+    role=requiredRole,
+    id=os.getComputerID(),
+    functionType=functionType
+})
+print("Slave running for area: " .. area .. " (role " .. requiredRole .. ")")
+
+-- Main loop
+while true do
+    local _, side, channel, replyChannel, msg = os.pullEvent("modem_message")
+
+    if msg then
+        if msg.type == "heartbeat" then
+            -- Reply alive
+            modem.transmit(MASTER_CHANNEL, MASTER_CHANNEL, {
+                type="alive",
+                id=os.getComputerID(),
+                area=area,
+                role=requiredRole,
+                functionType=functionType
+            })
+        elseif msg.type == "open" then
+            if msg.role >= requiredRole and functionType.type == "redstone" then
+                print("Access granted to " .. msg.user)
+                redstone.setOutput(functionType.side, true)
+                sleep(3)
+                redstone.setOutput(functionType.side, false)
+            elseif msg.role < requiredRole then
+                print("Access denied to " .. msg.user)
+            end
+        end
+    end
+end
+]]
+
+-- Write slave.lua to disk
+local file = fs.open("slave.lua", "w")
+file.write(slaveCode)
+file.close()
+print("slave.lua created! You can now run it to start the slave.")
