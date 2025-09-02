@@ -1,172 +1,220 @@
---========================--
---    SLOT MACHINE LUA    --
---========================--
+-------------------------
+-- SLOT MACHINE SETTINGS
+-------------------------
+local SYMBOLS = {"I","B","E","D","G","N"} 
+local SYMBOL_COLORS = {I=colors.red, B=colors.orange, E=colors.yellow, D=colors.green, G=colors.blue, N=colors.purple} -- symbol colors
 
---== SETTINGS ==--
-local baseJackpot   = 10
-local maxJackpot    = 128
-local debugMode     = false
+local BASE_SPIN_TIME = 1.5        -- total spin duration for first column
+local SPIN_STAGGER = 0.3          -- extra spin time per next column
+local JACKPOT_CAP = 128
+local PAYOUTS = {I=2,B=3,E=4,D=5,G=6}
 
--- pity enabled for N (jackpot symbol)
-local symbolPity = {
-    N = true
+-- Percentages for outcomes (add up to 100)
+local OUTCOME_CHANCES = {
+    jackpot = 5,   -- 5% chance if landed on N
+    triple  = 25,  -- 25% chance of WIN (non-N)
+    pity    = 10,  -- 10% chance of PITY
+    lose    = 60   -- 60% chance of LOSE
 }
 
--- payouts (3 in a row, except jackpot)
-local payouts = {
-    I = 3,
-    B = 5,
-    E = 8,
-    D = 10,
-    G = 15,
-    -- N = jackpot, handled separately
-}
+local PITY_PAYOUTS = {I=0,B=0,E=0,D=0,G=0,N=1}
 
--- symbols (N is jackpot symbol)
-local symbols = {
-    { name="I", color=colors.red,    weight=10 },
-    { name="B", color=colors.blue,   weight=10 },
-    { name="E", color=colors.green,  weight=10 },
-    { name="D", color=colors.orange, weight=10 },
-    { name="G", color=colors.yellow, weight=10 },
-    { name="N", color=colors.purple, weight=2  } -- Jackpot
-}
+local MONITOR_BG = colors.cyan      -- lightish blue background
+local SYMBOL_BG = colors.lightGray  -- symbol background
 
---== PERIPHERALS ==--
+-------------------------
+-- PERIPHERALS
+-------------------------
 local monitor = peripheral.wrap("right")
 local speaker = peripheral.wrap("top")
-local button  = "left"
-local dropper = "bottom"
+local dropper = peripheral.wrap("back")
+if not monitor then error("No monitor on right") end
+if not speaker then error("No speaker on top") end
+if not dropper then error("No dropper on back") end
 
---== VARIABLES ==--
-local jackpotCounter = baseJackpot
-
---== FUNCTIONS ==--
-
--- pick symbol by weight
-local function pickSymbol()
-    local total = 0
-    for _,sym in ipairs(symbols) do
-        total = total + sym.weight
-    end
-    local rnd = math.random(total)
-    local cumulative = 0
-    for _,sym in ipairs(symbols) do
-        cumulative = cumulative + sym.weight
-        if rnd <= cumulative then
-            return sym
-        end
-    end
-end
-
--- spin reels into 3x3 grid
-local function spinReels()
-    local grid = {}
-    for row=1,3 do
-        grid[row] = {}
-        for col=1,3 do
-            grid[row][col] = pickSymbol()
-        end
-    end
-    return grid
-end
-
--- draw reels grid
-local function drawGrid(grid)
-    monitor.setBackgroundColor(colors.lightBlue)
-    monitor.clear()
-    local w,h = monitor.getSize()
-    local startY = 3
-    for row=1,3 do
-        local line = ""
-        for col=1,3 do
-            line = line .. grid[row][col].name .. " "
-        end
-        local x = math.floor((w - #line)/2)
-        monitor.setCursorPos(x, startY + row - 1)
-        monitor.setTextColor(colors.white)
-        monitor.write(line)
-    end
-end
-
--- draw jackpot counter (always J:##)
-local function drawJackpot()
-    monitor.setCursorPos(2,1)
-    monitor.setTextColor(colors.white)
-    monitor.write("J:"..tostring(jackpotCounter))
-end
-
--- flash win/lose text
-local function flashText(text, color)
-    local w,h = monitor.getSize()
-    local x = math.floor((w - #text)/2)
-    local y = h
-    for i=1,3 do
-        monitor.setCursorPos(x,y)
-        monitor.setTextColor(color)
-        monitor.write(text)
-        sleep(0.3)
-        monitor.setCursorPos(x,y)
-        monitor.setBackgroundColor(colors.lightBlue)
-        monitor.write(string.rep(" ",#text))
-        sleep(0.3)
-    end
-end
-
--- evaluate middle row
-local function checkWin(grid)
-    local middleRow = grid[2]
-    local s1,s2,s3 = middleRow[1].name, middleRow[2].name, middleRow[3].name
-
-    -- jackpot (three N's)
-    if s1=="N" and s2=="N" and s3=="N" then
-        local payout = jackpotCounter
-        jackpotCounter = baseJackpot
-        redstone.setOutput(dropper,true)
-        sleep(payout*0.2)
-        redstone.setOutput(dropper,false)
-        flashText("JACKPOT!",colors.yellow)
-        return
-    end
-
-    -- three of a kind
-    if s1==s2 and s2==s3 then
-        local payout = payouts[s1] or 0
-        for i=1,payout do
-            redstone.setOutput(dropper,true)
-            sleep(0.2)
-            redstone.setOutput(dropper,false)
-        end
-        jackpotCounter = math.min(jackpotCounter+1,maxJackpot)
-        flashText("WIN!",colors.green)
-        return
-    end
-
-    -- pity (two of a kind + pity enabled)
-    if (s1==s2 or s2==s3 or s1==s3) and symbolPity[s1] then
-        redstone.setOutput(dropper,true)
-        sleep(0.2)
-        redstone.setOutput(dropper,false)
-        jackpotCounter = math.min(jackpotCounter+1,maxJackpot)
-        flashText("PITY!",colors.orange)
-        return
-    end
-
-    -- lose
-    jackpotCounter = math.min(jackpotCounter+1,maxJackpot)
-    flashText("LOSE!",colors.red)
-end
-
---== MAIN LOOP ==--
-monitor.setBackgroundColor(colors.lightBlue)
+monitor.setBackgroundColor(MONITOR_BG)
 monitor.clear()
+if monitor.setTextScale then monitor.setTextScale(1) end
 
+-------------------------
+-- STATE VARIABLES
+-------------------------
+local jackpotCounter = 10
+local spinning = false
+local resultText,resultColor = nil,nil
+
+-------------------------
+-- HELPER FUNCTIONS
+-------------------------
+local function drawAt(x,y,text,color,bg)
+    monitor.setCursorPos(x,y)
+    monitor.setTextColor(color or colors.white)
+    monitor.setBackgroundColor(bg or SYMBOL_BG)
+    monitor.write(text)
+end
+
+local function clearMonitor()
+    monitor.setBackgroundColor(MONITOR_BG)
+    monitor.clear()
+end
+
+local function playSound(name,pitch) speaker.playSound(name,1,pitch) end
+local function dispense(count) for i=1,count do dropper.drop(1) sleep(0.1) end end
+
+local function flashResult(text,color,x,y)
+    local flashes = 6
+    local flashColors = {colors.white,color}
+    for i=1,flashes do
+        if spinning then return end
+        drawAt(x,y,text,flashColors[(i%2)+1],SYMBOL_BG)
+        sleep(0.3)
+    end
+    drawAt(x,y,text,color,SYMBOL_BG)
+end
+
+-------------------------
+-- PAYOUT LOGIC
+-------------------------
+local function handleJackpot()
+    resultText = "JACKPOT!"
+    resultColor = colors.green
+    dispense(jackpotCounter)
+    jackpotCounter = 10
+    playSound("entity.player.levelup",1.2)
+end
+
+local function handleTriple(symbol)
+    local payout = PAYOUTS[symbol] or 1
+    resultText = "WIN"
+    resultColor = colors.green
+    dispense(payout)
+    jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
+    playSound("entity.player.levelup",1)
+end
+
+local function handlePity(symbol)
+    local payout = PITY_PAYOUTS[symbol]
+    if payout and payout>0 then
+        resultText = "PITY"
+        resultColor = colors.orange
+        dispense(payout)
+        jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
+        playSound("block.note_block.bell",1.2)
+    else
+        handleLose()
+    end
+end
+
+local function handleLose()
+    resultText = "LOSE"
+    resultColor = colors.red
+    jackpotCounter = math.min(jackpotCounter+1,JACKPOT_CAP)
+    playSound("block.note_block.bass",0.8)
+end
+
+-------------------------
+-- OUTCOME SELECTION (PERCENTAGES)
+-------------------------
+local function pickOutcome()
+    local roll = math.random(1,100)
+    local sum = 0
+    for outcome,chance in pairs(OUTCOME_CHANCES) do
+        sum = sum + chance
+        if roll <= sum then
+            return outcome
+        end
+    end
+    return "lose" -- fallback
+end
+
+-------------------------
+-- SPIN LOGIC (CENTERED GRID, COLORED SYMBOLS)
+-------------------------
+local function spin()
+    spinning = true
+    resultText,resultColor = nil,nil
+    clearMonitor()
+
+    local w,h = monitor.getSize()
+    if h<5 then error("Monitor too short for 3 rows + result") end
+    local middleRow = math.floor(h/2)
+
+    -- Horizontal positions for 3 columns (centered)
+    local symbolWidth = 1
+    local totalWidth = 3*symbolWidth + 2
+    local startX = math.floor((w-totalWidth)/2)+2
+    local symbolX = {startX, startX+2, startX+4}
+
+    local reels = {{" "," "," "},{" "," "," "},{" "," "," "}}
+
+    -- Draw invisible grid first
+    for row=1,3 do
+        for col=1,3 do
+            drawAt(symbolX[col], middleRow-2+row, " ", colors.white, SYMBOL_BG)
+        end
+    end
+
+    -- Spin each column independently with staggered stop times
+    for col=1,3 do
+        local columnSpinTime = BASE_SPIN_TIME + SPIN_STAGGER*(col-1)
+        local startTime = os.clock()
+        while os.clock()-startTime < columnSpinTime do
+            for row=1,3 do
+                reels[col][row] = SYMBOLS[math.random(#SYMBOLS)]
+                drawAt(symbolX[col], middleRow-2+row, reels[col][row], SYMBOL_COLORS[reels[col][row]], SYMBOL_BG)
+            end
+            playSound("block.note_block.hat",1)
+            sleep(0.15)
+        end
+    end
+
+    -- Final symbols for all columns
+    for col=1,3 do
+        for row=1,3 do
+            reels[col][row] = SYMBOLS[math.random(#SYMBOLS)]
+            drawAt(symbolX[col], middleRow-2+row, reels[col][row], SYMBOL_COLORS[reels[col][row]], SYMBOL_BG)
+        end
+    end
+
+    -- Evaluate middle row of middle column
+    local middleSymbol = reels[2][2]
+
+    if middleSymbol=="N" then
+        local outcome = pickOutcome()
+        if outcome=="jackpot" then
+            handleJackpot()
+        elseif outcome=="pity" then
+            handlePity(middleSymbol)
+        else
+            handleLose()
+        end
+    else
+        local outcome = pickOutcome()
+        if outcome=="triple" then
+            handleTriple(middleSymbol)
+        elseif outcome=="pity" then
+            handlePity(middleSymbol)
+        else
+            handleLose()
+        end
+    end
+
+    -- Jackpot counter top-right
+    drawAt(w-7,1,"J:"..jackpotCounter,colors.white,SYMBOL_BG)
+
+    -- Flash result bottom row
+    local resultY = h
+    flashResult(resultText,resultColor,math.floor(w/2),resultY)
+
+    spinning = false
+end
+
+-------------------------
+-- MAIN LOOP
+-------------------------
 while true do
-    local event, side = os.pullEvent("redstone")
-    if side==button and redstone.getInput(button) then
-        local grid = spinReels()
-        drawGrid(grid)
-        drawJackpot()
-        checkWin(grid)
+    os.pullEvent("redstone")
+    if redstone.getInput("bottom") and not spinning then
+        spin()
     end
 end
