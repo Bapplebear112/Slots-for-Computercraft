@@ -1,0 +1,121 @@
+-- bank.lua (master computer)
+local accountsFile = "/disk/accounts.db"
+
+-- Load accounts
+local function loadAccounts()
+    if not fs.exists(accountsFile) then
+        return {}
+    end
+    local file = fs.open(accountsFile, "r")
+    local data = file.readAll()
+    file.close()
+    return textutils.unserializeJSON(data) or {}
+end
+
+-- Save accounts
+local function saveAccounts(accounts)
+    local file = fs.open(accountsFile, "w")
+    file.write(textutils.serializeJSON(accounts))
+    file.close()
+end
+
+-- Prompt for login
+local function login(accounts)
+    term.clear()
+    term.setCursorPos(1,1)
+    print("=== Bank Login ===")
+    write("Username: ")
+    local user = read()
+    write("Password: ")
+    local pass = read("*")
+
+    if accounts[user] and accounts[user].password == pass then
+        print("Login successful! Welcome, " .. user)
+        return user, accounts[user].role
+    else
+        print("Invalid login!")
+        sleep(2)
+        return nil
+    end
+end
+
+-- Admin menu
+local function adminMenu(accounts)
+    while true do
+        term.clear()
+        print("=== Admin Menu ===")
+        print("1. Create account")
+        print("2. Delete account")
+        print("3. List accounts")
+        print("4. Logout")
+        write("Choose option: ")
+        local choice = read()
+
+        if choice == "1" then
+            write("Enter new username: ")
+            local uname = read()
+            if accounts[uname] then
+                print("User already exists!")
+            else
+                write("Enter password: ")
+                local pwd = read("*")
+                accounts[uname] = { password = pwd, role = "user" }
+                saveAccounts(accounts)
+                print("Account created!")
+            end
+            sleep(2)
+
+        elseif choice == "2" then
+            write("Enter username to delete: ")
+            local uname = read()
+            if uname == "admin" then
+                print("Cannot delete admin account!")
+            elseif accounts[uname] then
+                accounts[uname] = nil
+                saveAccounts(accounts)
+                print("Account deleted!")
+            else
+                print("User not found!")
+            end
+            sleep(2)
+
+        elseif choice == "3" then
+            print("Registered accounts:")
+            for k,v in pairs(accounts) do
+                print(" - " .. k .. " (" .. v.role .. ")")
+            end
+            sleep(4)
+
+        elseif choice == "4" then
+            break
+        else
+            print("Invalid choice!")
+            sleep(2)
+        end
+    end
+end
+
+-- Main loop
+local function main()
+    local accounts = loadAccounts()
+
+    -- If no admin, create default admin
+    if not accounts["admin"] then
+        accounts["admin"] = { password = "admin123", role = "admin" }
+        saveAccounts(accounts)
+    end
+
+    while true do
+        local user, role = login(accounts)
+        if user then
+            if role == "admin" then
+                adminMenu(accounts)
+            else
+                print("Welcome, user " .. user .. "! (user menu TBD)")
+                sleep(3)
+            end
+        end
+    end
+end
+
+main()
